@@ -1,0 +1,30 @@
+name: Daily Newsletter
+
+on:
+  schedule:
+    # 朝7:00 JST = 22:00 UTC (前日)
+    - cron: '0 22 * * *'
+    # 夜21:00 JST = 12:00 UTC
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+
+jobs:
+  newsletter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Determine edition
+        id: edition
+        run: |
+          HOUR=$(TZ=Asia/Tokyo date +%H)
+          if [ "$HOUR" -lt 12 ]; then
+            echo "edition=morning" >> $GITHUB_OUTPUT
+          else
+            echo "edition=evening" >> $GITHUB_OUTPUT
+          fi
+      - name: Send newsletter
+        run: python daily-newsletter.py ${{ steps.edition.outputs.edition }}

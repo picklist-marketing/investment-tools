@@ -1,0 +1,32 @@
+name: Trading Brain Briefings
+
+on:
+  schedule:
+    # 朝ブリーフィング 8:30 JST = 23:30 UTC (前日)
+    - cron: '30 23 * * 0-4'
+    # 夜ブリーフィング 22:00 JST = 13:00 UTC
+    - cron: '0 13 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  briefing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Determine market
+        id: market
+        run: |
+          HOUR=$(TZ=Asia/Tokyo date +%H)
+          if [ "$HOUR" -lt 12 ]; then
+            echo "market=jp" >> $GITHUB_OUTPUT
+            echo "type=briefing" >> $GITHUB_OUTPUT
+          else
+            echo "market=us" >> $GITHUB_OUTPUT
+            echo "type=briefing" >> $GITHUB_OUTPUT
+          fi
+      - name: Run briefing
+        run: python trading-brain.py ${{ steps.market.outputs.type }} ${{ steps.market.outputs.market }}

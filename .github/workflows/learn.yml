@@ -1,0 +1,25 @@
+name: Investment Learning
+
+on:
+  schedule:
+    # 月水金 8:00 JST = 23:00 UTC (前日の日月水)
+    - cron: '0 23 * * 0,2,4'
+  workflow_dispatch:
+
+jobs:
+  learn:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - name: Send lesson
+        run: python invest-learn.py send
+      - name: Commit progress
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add invest-learn-state.json
+          git diff --staged --quiet || git commit -m "Update lesson progress" && git push

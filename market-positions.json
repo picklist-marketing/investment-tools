@@ -1,0 +1,46 @@
+[
+  {
+    "ticker": "SMCI",
+    "name": "Super Micro Computer, Inc.",
+    "market": "US",
+    "entry_price": 32.37,
+    "shares": 5,
+    "added": "2026-02-26T00:13:06.065083",
+    "current_price": 32.279998779296875,
+    "pnl_pct": -0.2780389888882374,
+    "last_check": "2026-02-27 15:45"
+  },
+  {
+    "ticker": "9101.T",
+    "name": "日本郵船",
+    "market": "JP",
+    "entry_price": 5372.0,
+    "shares": 3,
+    "added": "2026-02-26T09:44:04.589765",
+    "current_price": 5369.0,
+    "pnl_pct": -0.05584512285927029,
+    "last_check": "2026-02-27 15:45"
+  },
+  {
+    "ticker": "6758.T",
+    "name": "ソニーグループ",
+    "market": "JP",
+    "entry_price": 3536.0,
+    "shares": 10,
+    "added": "2026-02-26T14:26:12.694124",
+    "current_price": 3643.0,
+    "pnl_pct": 3.026018099547511,
+    "last_check": "2026-02-27 15:45"
+  },
+  {
+    "ticker": "6594.T",
+    "name": "ニデック",
+    "market": "JP",
+    "entry_price": 2456.33,
+    "shares": 15,
+    "added": "2026-02-27T15:08:58.920419",
+    "current_price": 2462.0,
+    "pnl_pct": 0.23083217645837786,
+    "last_check": "2026-02-27 15:45"
+  }
+]

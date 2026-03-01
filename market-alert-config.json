@@ -1,0 +1,18 @@
+{
+  "line": {
+    "channel_access_token": "VgBTWb8O8RL0MNtqbTdQrFfk1Lu0Qm0mDvfNDEn7Ip04x6tAabbzqEqwArUDrtOlLAWnAqtwdcILPvjH2B0F38lAzZFXX/MTwKjrVQEImUTyLpLwDsnJ8Nq/hllRFS/j/SZlRpKcbzMEzu+TxJBf/gdB04t89/1O/w1cDnyilFU=",
+    "user_id": "Ue2579f19baeb0ae8a257ac70137ee5fe"
+  },
+  "rules": {
+    "stop_loss_pct": -8,
+    "target_profit_pct": 15,
+    "trailing_stop_pct": -5,
+    "rsi_sell_threshold": 75,
+    "macd_death_cross": true,
+    "bb_upper_warn": true
+  },
+  "notify": {
+    "line_enabled": true,
+    "mac_notify": true
+  }
+}
