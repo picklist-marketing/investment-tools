@@ -15,8 +15,8 @@ from datetime import datetime
 import sys
 
 # ===== 設定 =====
-CONFIG_FILE = os.path.expanduser("~/market-alert-config.json")
-POSITIONS_FILE = os.path.expanduser("~/market-positions.json")
+CONFIG_FILE = "market-alert-config.json"
+POSITIONS_FILE = "market-positions.json"
 
 
 def load_config():
@@ -32,8 +32,8 @@ def load_positions():
 
 
 def send_line_message(config, message):
-    token = config["line"]["channel_access_token"]
-    user_id = config["line"]["user_id"]
+    token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") or config["line"]["channel_access_token"]
+    user_id = os.environ.get("LINE_USER_ID") or config["line"]["user_id"]
     if not token or not user_id:
         return False
     url = "https://api.line.me/v2/bot/message/push"

@@ -29,9 +29,9 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 
 # ===== 設定 =====
-CONFIG_FILE = os.path.expanduser("~/market-alert-config.json")
-BRAIN_STATE_FILE = os.path.expanduser("~/trading-brain-state.json")
-POSITIONS_FILE = os.path.expanduser("~/market-positions.json")
+CONFIG_FILE = "market-alert-config.json"
+BRAIN_STATE_FILE = "trading-brain-state.json"
+POSITIONS_FILE = "market-positions.json"
 
 # ===== 全監視銘柄 =====
 JP_STOCKS = {
@@ -560,20 +560,27 @@ def analyze_sectors(results):
 
 
 # ===== LINE通知 =====
-def send_line(message):
+def _get_line_credentials():
+    """環境変数を優先し、なければ設定ファイルから読む"""
+    token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN", "")
+    user_id = os.environ.get("LINE_USER_ID", "")
+    if token and user_id:
+        return token, user_id
+
     if not os.path.exists(CONFIG_FILE):
-        return False
+        return "", ""
     try:
         with open(CONFIG_FILE, 'r') as f:
             config = json.load(f)
+        if not config.get("notify", {}).get("line_enabled"):
+            return "", ""
+        return config["line"]["channel_access_token"], config["line"]["user_id"]
     except:
-        return False
+        return "", ""
 
-    if not config.get("notify", {}).get("line_enabled"):
-        return False
 
-    token = config["line"]["channel_access_token"]
-    user_id = config["line"]["user_id"]
+def send_line(message):
+    token, user_id = _get_line_credentials()
     if not token or not user_id:
         return False
 
@@ -593,16 +600,7 @@ def send_line(message):
 
 def send_line_multi(messages):
     """複数メッセージ送信（最大5通）"""
-    if not os.path.exists(CONFIG_FILE):
-        return False
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            config = json.load(f)
-    except:
-        return False
-
-    token = config["line"]["channel_access_token"]
-    user_id = config["line"]["user_id"]
+    token, user_id = _get_line_credentials()
     if not token or not user_id:
         return False
 

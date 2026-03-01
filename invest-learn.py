@@ -11,8 +11,8 @@ import os
 import requests
 from datetime import datetime
 
-CONFIG_FILE = os.path.expanduser("~/market-alert-config.json")
-STATE_FILE = os.path.expanduser("~/invest-learn-state.json")
+CONFIG_FILE = "market-alert-config.json"
+STATE_FILE = "invest-learn-state.json"
 
 # ===== 学習コンテンツ =====
 LESSONS = [
@@ -898,8 +898,8 @@ def save_state(state):
 
 
 def send_line_message(config, message):
-    token = config["line"]["channel_access_token"]
-    user_id = config["line"]["user_id"]
+    token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") or config["line"]["channel_access_token"]
+    user_id = os.environ.get("LINE_USER_ID") or config["line"]["user_id"]
     if not token or not user_id:
         return False
     url = "https://api.line.me/v2/bot/message/push"

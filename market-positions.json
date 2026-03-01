@@ -42,5 +42,27 @@
     "current_price": 2462.0,
     "pnl_pct": 0.23083217645837786,
     "last_check": "2026-02-27 15:45"
+  },
+  {
+    "ticker": "NU",
+    "name": "Nu Holdings Ltd.",
+    "market": "US",
+    "entry_price": 14.98,
+    "shares": 5,
+    "added": "2026-03-02T00:00:00",
+    "current_price": 14.98,
+    "pnl_pct": 0.0,
+    "last_check": "2026-03-02 00:00"
+  },
+  {
+    "ticker": "SOFI",
+    "name": "SoFi Technologies, Inc.",
+    "market": "US",
+    "entry_price": 17.76,
+    "shares": 5,
+    "added": "2026-03-02T00:00:00",
+    "current_price": 17.76,
+    "pnl_pct": 0.0,
+    "last_check": "2026-03-02 00:00"
   }
 ]

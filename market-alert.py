@@ -16,9 +16,9 @@ import requests
 from datetime import datetime, timedelta
 
 # ===== 設定ファイルパス =====
-CONFIG_FILE = os.path.expanduser("~/market-alert-config.json")
-POSITIONS_FILE = os.path.expanduser("~/market-positions.json")
-ALERT_LOG_FILE = os.path.expanduser("~/market-alert-log.json")
+CONFIG_FILE = "market-alert-config.json"
+POSITIONS_FILE = "market-positions.json"
+ALERT_LOG_FILE = "market-alert-log.json"
 
 # ===== デフォルト設定 =====
 DEFAULT_CONFIG = {
@@ -68,9 +68,9 @@ def save_positions(positions):
 
 # ===== 通知 =====
 def send_line_message(config, message):
-    """LINE Messaging APIでプッシュ通知"""
-    token = config["line"]["channel_access_token"]
-    user_id = config["line"]["user_id"]
+    """LINE Messaging APIでプッシュ通知（環境変数優先）"""
+    token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") or config["line"]["channel_access_token"]
+    user_id = os.environ.get("LINE_USER_ID") or config["line"]["user_id"]
 
     if not token or not user_id:
         return False
