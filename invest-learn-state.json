@@ -1,10 +1,15 @@
 {
-  "next_index": 1,
+  "next_index": 2,
   "sent_log": [
     {
       "index": 0,
       "title": "PER（株価収益率）",
       "sent_at": "2026-02-26T12:02:10.396493"
+    },
+    {
+      "index": 1,
+      "title": "PBR（株価純資産倍率）",
+      "sent_at": "2026-03-01T23:12:29.327012"
     }
   ]
 }
