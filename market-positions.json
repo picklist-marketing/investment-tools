@@ -6,9 +6,9 @@
     "entry_price": 32.37,
     "shares": 5,
     "added": "2026-02-26T00:13:06.065083",
-    "current_price": 32.279998779296875,
-    "pnl_pct": -0.2780389888882374,
-    "last_check": "2026-02-27 15:45"
+    "current_price": 32.38999938964844,
+    "pnl_pct": 0.06178371840729088,
+    "last_check": "2026-03-02 00:31"
   },
   {
     "ticker": "9101.T",
@@ -17,9 +17,9 @@
     "entry_price": 5372.0,
     "shares": 3,
     "added": "2026-02-26T09:44:04.589765",
-    "current_price": 5369.0,
-    "pnl_pct": -0.05584512285927029,
-    "last_check": "2026-02-27 15:45"
+    "current_price": 5461.0,
+    "pnl_pct": 1.6567386448250188,
+    "last_check": "2026-03-02 00:31"
   },
   {
     "ticker": "6758.T",
@@ -28,9 +28,9 @@
     "entry_price": 3536.0,
     "shares": 10,
     "added": "2026-02-26T14:26:12.694124",
-    "current_price": 3643.0,
-    "pnl_pct": 3.026018099547511,
-    "last_check": "2026-02-27 15:45"
+    "current_price": 3541.0,
+    "pnl_pct": 0.1414027149321267,
+    "last_check": "2026-03-02 00:31"
   },
   {
     "ticker": "6594.T",
@@ -39,9 +39,9 @@
     "entry_price": 2456.33,
     "shares": 15,
     "added": "2026-02-27T15:08:58.920419",
-    "current_price": 2462.0,
-    "pnl_pct": 0.23083217645837786,
-    "last_check": "2026-02-27 15:45"
+    "current_price": 2323.0,
+    "pnl_pct": -5.428016593861571,
+    "last_check": "2026-03-02 00:31"
   },
   {
     "ticker": "NU",
@@ -50,9 +50,9 @@
     "entry_price": 14.98,
     "shares": 5,
     "added": "2026-03-02T00:00:00",
-    "current_price": 14.98,
-    "pnl_pct": 0.0,
-    "last_check": "2026-03-02 00:00"
+    "current_price": 14.979999542236328,
+    "pnl_pct": -3.0558322583533084e-06,
+    "last_check": "2026-03-02 00:31"
   },
   {
     "ticker": "SOFI",
@@ -61,8 +61,8 @@
     "entry_price": 17.76,
     "shares": 5,
     "added": "2026-03-02T00:00:00",
-    "current_price": 17.76,
-    "pnl_pct": 0.0,
-    "last_check": "2026-03-02 00:00"
+    "current_price": 17.760000228881836,
+    "pnl_pct": 1.288749067422894e-06,
+    "last_check": "2026-03-02 00:31"
   }
 ]
