@@ -156,6 +156,16 @@ def calc_bollinger(series, period=20, std_dev=2):
     return upper, sma, lower
 
 
+def calc_atr(high, low, close, period=14):
+    """ATR (Average True Range) 計算"""
+    tr = pd.concat([
+        high - low,
+        (high - close.shift()).abs(),
+        (low - close.shift()).abs()
+    ], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
+
+
 def analyze_for_sell(ticker):
     """売りシグナル用のテクニカル分析"""
     try:
@@ -165,12 +175,15 @@ def analyze_for_sell(ticker):
             return None
 
         close = data['Close']
+        high_s = data['High']
+        low_s = data['Low']
         current = float(close.iloc[-1])
         high_price = float(close.max())  # 期間中の最高値
 
         rsi = calc_rsi(close)
         macd_line, signal_line, macd_hist = calc_macd(close)
         bb_upper, bb_mid, bb_lower = calc_bollinger(close)
+        atr_series = calc_atr(high_s, low_s, close)
 
         def safe_float(s, idx=-1, default=0):
             try:
@@ -178,6 +191,9 @@ def analyze_for_sell(ticker):
                 return v if not pd.isna(v) else default
             except:
                 return default
+
+        cur_atr = safe_float(atr_series, -1, 0)
+        atr_pct = cur_atr / current * 100 if current > 0 else 0
 
         return {
             "price": current,
@@ -187,6 +203,8 @@ def analyze_for_sell(ticker):
             "prev_macd_hist": safe_float(macd_hist, -2, 0),
             "bb_upper": safe_float(bb_upper, -1, current * 1.05),
             "bb_lower": safe_float(bb_lower, -1, current * 0.95),
+            "atr": cur_atr,
+            "atr_pct": atr_pct,
         }
     except Exception as e:
         print(f"  分析エラー ({ticker}): {e}")
@@ -266,13 +284,16 @@ def check_positions(config):
             )
             urgency = max(urgency, 2)
 
-        # 3. トレーリングストップ → 注意（様子見でOK）
+        # 3. トレーリングストップ（ATR動的） → 注意（様子見でOK）
         high = analysis["high_3mo"]
+        atr_pct_val = analysis.get("atr_pct", 0)
+        # ATR×2%を基準に、最低3%〜最大10%の範囲でクランプ
+        dynamic_trail_pct = max(3.0, min(10.0, atr_pct_val * 2))
         if high > entry_price:
             drop_from_high = (current - high) / high * 100
-            if drop_from_high <= rules["trailing_stop_pct"]:
+            if drop_from_high <= -dynamic_trail_pct:
                 sell_signals.append(
-                    f"📉 直近3ヶ月の高値から{drop_from_high:.1f}%下落中\n"
+                    f"📉 直近3ヶ月の高値から{drop_from_high:.1f}%下落中（ATR動的ストップ: -{dynamic_trail_pct:.1f}%）\n"
                     f"  → 下落トレンドの可能性あり\n"
                     f"  → あなたの損益: {pnl_pct:+.1f}%  損切りライン({sp_str})まで あと{dist_to_stop:.1f}%\n"
                     f"  → 今すぐ売る必要はなし。{sp_str}を割ったら損切り"

@@ -169,6 +169,19 @@ def sf(s, idx=-1, default=0):
         return default
 
 
+def is_rsi_rising(rsi_series, days=2):
+    """RSIがdays日連続で上昇しているか判定"""
+    if len(rsi_series) < days + 1:
+        return False
+    recent = rsi_series.iloc[-(days + 1):]
+    for i in range(1, len(recent)):
+        if pd.isna(recent.iloc[i]) or pd.isna(recent.iloc[i - 1]):
+            return False
+        if recent.iloc[i] <= recent.iloc[i - 1]:
+            return False
+    return True
+
+
 # ===== パターン検出 =====
 def detect_patterns(close, high, low):
     """チャートパターンを検出"""
@@ -248,6 +261,18 @@ def calc_support_resistance(close, high, low):
     return {"pivot": pivot, "R1": r1, "R2": r2, "S1": s1, "S2": s2}
 
 
+def check_trend_alignment(sma5, sma20, sma60, price):
+    """トレンドの整合性チェック。True=上向きトレンド"""
+    bullish_count = 0
+    if price > sma5:
+        bullish_count += 1
+    if sma5 > sma20:
+        bullish_count += 1
+    if sma20 > sma60:
+        bullish_count += 1
+    return bullish_count >= 2
+
+
 # ===== 銘柄分析 =====
 def full_analyze(ticker, info, market):
     """フル分析"""
@@ -314,15 +339,24 @@ def full_analyze(ticker, info, market):
         score = 0
         thinking = []  # 思考プロセス
 
-        # RSI日足
+        # RSI日足（リカバリーパターン対応）
+        rsi_rising = is_rsi_rising(rsi_d, days=2)
         if cur_rsi < 25:
             signals.append(f"RSI極端売られすぎ({cur_rsi:.0f})")
-            score += 30
-            thinking.append(f"RSI{cur_rsi:.0f}は極端に低い。市場が過剰に売っている可能性が高く、反発の確率が高い(+30)")
+            if rsi_rising:
+                score += 25
+                thinking.append(f"RSI{cur_rsi:.0f}は極端に低いが回復中(2日連続上昇)。底打ち反発の可能性が高い(+25)")
+            else:
+                score += 5
+                thinking.append(f"RSI{cur_rsi:.0f}は極端に低いがまだ下落中。落ちるナイフを掴むリスクあり(+5)")
         elif cur_rsi < 30:
             signals.append(f"RSI売られすぎ({cur_rsi:.0f})")
-            score += 20
-            thinking.append(f"RSI{cur_rsi:.0f}で売られすぎゾーン。反発を狙える水準(+20)")
+            if rsi_rising:
+                score += 15
+                thinking.append(f"RSI{cur_rsi:.0f}で売られすぎゾーン+回復中。反発を狙える水準(+15)")
+            else:
+                score += 8
+                thinking.append(f"RSI{cur_rsi:.0f}で売られすぎだがまだ下落中。回復を待ってからエントリー(+8)")
         elif cur_rsi > 75:
             signals.append(f"RSI買われすぎ({cur_rsi:.0f})")
             score -= 25
@@ -471,6 +505,19 @@ def full_analyze(ticker, info, market):
         reward = sr["R1"] - cur
         rr_ratio = reward / risk if risk > 0 else 0
 
+        # === トリニティゲート ===
+        if score >= 40:
+            trend_ok = check_trend_alignment(sma5_v, sma20_v, sma60_v, cur)
+            if not trend_ok:
+                score -= 20
+                thinking.append("⛩️ トリニティゲート: トレンドが下向き。買いスコアが高くても逆張りはリスク大(-20)")
+            if vol_ratio < 1.0:
+                score -= 10
+                thinking.append("⛩️ トリニティゲート: 出来高が平均以下。上昇の裏付けが弱い(-10)")
+            if rr_ratio > 0 and rr_ratio < 2.0:
+                score -= 10
+                thinking.append(f"⛩️ トリニティゲート: R:R比{rr_ratio:.1f}:1は2.0未満。リスクに見合わない(-10)")
+
         # 最終思考まとめ
         if score >= 40:
             thinking.append(f"→ 合計スコア{score:+d}。複数の買い根拠が重なっており確度が高い。エントリー推奨。")
@@ -557,6 +604,25 @@ def analyze_sectors(results):
     # スコア順にソート
     sorted_sectors = sorted(sector_avg.items(), key=lambda x: x[1]["avg_score"], reverse=True)
     return sorted_sectors
+
+
+def get_position_sectors():
+    """保有ポジションのセクター別銘柄数を返す"""
+    if not os.path.exists(POSITIONS_FILE):
+        return {}
+    try:
+        with open(POSITIONS_FILE, 'r') as f:
+            positions = json.load(f)
+    except:
+        return {}
+
+    sector_count = defaultdict(int)
+    all_stocks = {**JP_STOCKS, **US_STOCKS}
+    for p in positions:
+        ticker = p.get("ticker", "")
+        if ticker in all_stocks:
+            sector_count[all_stocks[ticker]["sector"]] += 1
+    return dict(sector_count)
 
 
 # ===== LINE通知 =====
@@ -722,16 +788,69 @@ def run_brain(markets="all", mode="scan"):
     # 市場レジーム
     regime = analyze_market_regime()
 
+    # VIXレジーム動的閾値
+    vix_val = regime.get("VIX恐怖指数", {}).get("price", 20)
+    if vix_val > 30:
+        th_elite, th_hot, th_warm = 80, 60, 40
+        vix_regime_label = f"VIX{vix_val:.0f}(パニック) → 閾値引上げ {th_elite}/{th_hot}/{th_warm}"
+    elif vix_val > 25:
+        th_elite, th_hot, th_warm = 70, 50, 30
+        vix_regime_label = f"VIX{vix_val:.0f}(警戒) → 閾値引上げ {th_elite}/{th_hot}/{th_warm}"
+    elif vix_val < 15:
+        th_elite, th_hot, th_warm = 50, 35, 15
+        vix_regime_label = f"VIX{vix_val:.0f}(超安定) → 閾値引下げ {th_elite}/{th_hot}/{th_warm}"
+    else:
+        th_elite, th_hot, th_warm = 60, 40, 20
+        vix_regime_label = f"VIX{vix_val:.0f}(通常) → 閾値 {th_elite}/{th_hot}/{th_warm}"
+
     # セクター分析
     sectors = analyze_sectors(results)
 
-    # カテゴリ分け
-    elite = [r for r in results if r["score"] >= 60]  # 即エントリー
-    hot = [r for r in results if 40 <= r["score"] < 60]  # 強い買い
-    warm = [r for r in results if 20 <= r["score"] < 40]  # 買い検討
-    danger = [r for r in results if r["score"] <= -40]  # 強い売り
+    # セクター集中ペナルティ
+    pos_sectors = get_position_sectors()
+    all_stocks = {**JP_STOCKS, **US_STOCKS}
+    for r in results:
+        ticker_sector = r.get("sector", "")
+        held = pos_sectors.get(ticker_sector, 0)
+        if held >= 2:
+            r["score"] -= 20
+            r["thinking"].append(f"⛩️ セクター集中: {ticker_sector}セクターに既に{held}銘柄保有中。集中リスク(-20)")
+        elif held == 1:
+            r["score"] -= 5
+            r["thinking"].append(f"⛩️ セクター集中: {ticker_sector}セクターに1銘柄保有中。軽微な集中(-5)")
 
-    print(f"\n  ★★即エントリー: {len(elite)}  ★強い買い: {len(hot)}")
+    # verdictを再計算（閾値変更+ペナルティ反映）
+    for r in results:
+        s = r["score"]
+        if s >= th_elite:
+            r["verdict"] = "★★ 即エントリー"
+            r["urgency"] = 3
+        elif s >= th_hot:
+            r["verdict"] = "★ 強い買い"
+            r["urgency"] = 2
+        elif s >= th_warm:
+            r["verdict"] = "◎ 買い検討"
+            r["urgency"] = 1
+        elif s >= -20:
+            r["verdict"] = "― 中立"
+            r["urgency"] = 0
+        elif s >= -40:
+            r["verdict"] = "▼ 売り検討"
+            r["urgency"] = -1
+        else:
+            r["verdict"] = "✕ 強い売り"
+            r["urgency"] = -2
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+
+    # カテゴリ分け（動的閾値）
+    elite = [r for r in results if r["score"] >= th_elite]
+    hot = [r for r in results if th_hot <= r["score"] < th_elite]
+    warm = [r for r in results if th_warm <= r["score"] < th_hot]
+    danger = [r for r in results if r["score"] <= -40]
+
+    print(f"\n  📊 {vix_regime_label}")
+    print(f"  ★★即エントリー: {len(elite)}  ★強い買い: {len(hot)}")
     print(f"  ◎買い検討: {len(warm)}  ✕強い売り: {len(danger)}")
 
     # === 朝ブリーフィング判定 ===
@@ -770,6 +889,7 @@ def run_brain(markets="all", mode="scan"):
         if fx_info:
             lines.append(f"  ドル円: ¥{fx_info.get('price', 0):,.1f}")
         lines.append(f"  → {regime.get('advice', '')}")
+        lines.append(f"  📊 {vix_regime_label}")
         lines.append("")
 
         # セクターローテーション
