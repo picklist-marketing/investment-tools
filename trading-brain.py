@@ -182,6 +182,39 @@ def is_rsi_rising(rsi_series, days=2):
     return True
 
 
+def macd_freshness(hist_series):
+    """MACDヒストグラムの鮮度を判定
+    Returns: (is_fresh, is_expanding, is_decaying)
+    - is_fresh: 3日以内にGC（マイナス→プラス転換）
+    - is_expanding: ヒストグラムが拡大中
+    - is_decaying: MACD正圏だが2日連続縮小
+    """
+    if len(hist_series) < 5:
+        return False, False, False
+
+    vals = hist_series.dropna().values
+    if len(vals) < 5:
+        return False, False, False
+
+    cur = vals[-1]
+
+    # is_fresh: 直近3日以内にマイナス→プラス転換があったか
+    is_fresh = False
+    for i in range(-3, 0):
+        if len(vals) >= abs(i) + 1:
+            if vals[i] > 0 and vals[i - 1] <= 0:
+                is_fresh = True
+                break
+
+    # is_expanding: ヒストグラムが正で拡大中
+    is_expanding = cur > 0 and cur > vals[-2]
+
+    # is_decaying: MACD正圏だが2日連続縮小
+    is_decaying = cur > 0 and vals[-2] > 0 and cur < vals[-2] and vals[-2] < vals[-3]
+
+    return is_fresh, is_expanding, is_decaying
+
+
 # ===== パターン検出 =====
 def detect_patterns(close, high, low):
     """チャートパターンを検出"""
@@ -261,6 +294,103 @@ def calc_support_resistance(close, high, low):
     return {"pivot": pivot, "R1": r1, "R2": r2, "S1": s1, "S2": s2}
 
 
+def calc_enhanced_sr(close, high, low, vol, market="JP", cur_atr=0):
+    """強化版支持線・抵抗線（改善6）
+    ピボットポイント + スイングハイ/ロー + 心理的節目 + 出来高集中帯 + コンフルエンス
+    """
+    h = float(high.iloc[-1])
+    l_val = float(low.iloc[-1])
+    c = float(close.iloc[-1])
+
+    # 基本ピボット
+    pivot = (h + l_val + c) / 3
+    r1 = 2 * pivot - l_val
+    s1 = 2 * pivot - h
+    r2 = pivot + (h - l_val)
+    s2 = pivot - (h - l_val)
+
+    supports = [s1, s2]
+    resistances = [r1, r2]
+
+    # 1. スイングハイ/ロー（直近60日で2バー前後より高い/低い局所極値）
+    lookback = min(60, len(close))
+    prices = close.values[-lookback:]
+    highs = high.values[-lookback:]
+    lows = low.values[-lookback:]
+
+    for i in range(2, len(prices) - 2):
+        if lows[i] < lows[i-1] and lows[i] < lows[i-2] and lows[i] < lows[i+1] and lows[i] < lows[i+2]:
+            supports.append(float(lows[i]))
+        if highs[i] > highs[i-1] and highs[i] > highs[i-2] and highs[i] > highs[i+1] and highs[i] > highs[i+2]:
+            resistances.append(float(highs[i]))
+
+    # 2. 心理的節目
+    if market == "JP":
+        steps = [1000, 500]
+    else:
+        steps = [10, 5]
+    for step in steps:
+        base = int(c / step) * step
+        for mult in range(-4, 5):
+            level = base + mult * step
+            if abs(level - c) / c <= 0.20 and level > 0:
+                if level < c:
+                    supports.append(float(level))
+                elif level > c:
+                    resistances.append(float(level))
+
+    # 3. 出来高集中帯（60日の価格を20ビンに分割、最大出来高ビン）
+    if lookback >= 10 and len(vol) >= lookback:
+        vol_vals = vol.values[-lookback:]
+        price_min = float(np.min(prices))
+        price_max = float(np.max(prices))
+        if price_max > price_min:
+            bins = np.linspace(price_min, price_max, 21)
+            bin_vol = np.zeros(20)
+            for j in range(len(prices)):
+                idx = min(int((prices[j] - price_min) / (price_max - price_min) * 20), 19)
+                bin_vol[idx] += vol_vals[j]
+            max_bin = int(np.argmax(bin_vol))
+            vol_center = (bins[max_bin] + bins[max_bin + 1]) / 2
+            if vol_center < c:
+                supports.append(vol_center)
+            else:
+                resistances.append(vol_center)
+
+    # 4. コンフルエンス判定（1%以内に2つ以上の支持線→「支持線ゾーン」）
+    confluence_support = False
+    confluence_resistance = False
+    threshold = c * 0.01  # 1%
+
+    # 支持線コンフルエンス
+    supports_sorted = sorted(set(supports), reverse=True)
+    for i, s_level in enumerate(supports_sorted):
+        count = sum(1 for other in supports_sorted if abs(other - s_level) <= threshold)
+        if count >= 2 and abs(c - s_level) / c <= 0.05:
+            confluence_support = True
+            break
+
+    # 抵抗線コンフルエンス
+    resistances_sorted = sorted(set(resistances))
+    for i, r_level in enumerate(resistances_sorted):
+        count = sum(1 for other in resistances_sorted if abs(other - r_level) <= threshold)
+        if count >= 2 and abs(r_level - c) / c <= 0.05:
+            confluence_resistance = True
+            break
+
+    # 最も近い支持線・抵抗線を選択
+    valid_supports = [s for s in supports if s < c]
+    valid_resistances = [r for r in resistances if r > c]
+    best_s1 = max(valid_supports) if valid_supports else s1
+    best_r1 = min(valid_resistances) if valid_resistances else r1
+
+    return {
+        "pivot": pivot, "R1": best_r1, "R2": r2, "S1": best_s1, "S2": s2,
+        "confluence_support": confluence_support,
+        "confluence_resistance": confluence_resistance,
+    }
+
+
 def check_trend_alignment(sma5, sma20, sma60, price):
     """トレンドの整合性チェック。True=上向きトレンド"""
     bullish_count = 0
@@ -274,7 +404,7 @@ def check_trend_alignment(sma5, sma20, sma60, price):
 
 
 # ===== 銘柄分析 =====
-def full_analyze(ticker, info, market):
+def full_analyze(ticker, info, market, signal_weights=None):
     """フル分析"""
     try:
         t = yf.Ticker(ticker)
@@ -331,12 +461,13 @@ def full_analyze(ticker, info, market):
         # ダイバージェンス
         divergences = detect_divergence(close, rsi_d)
 
-        # 支持線・抵抗線
-        sr = calc_support_resistance(close, high_s, low_s)
+        # 支持線・抵抗線（強化版: 改善6）
+        sr = calc_enhanced_sr(close, high_s, low_s, vol, market, cur_atr)
 
         # ===== スコアリング（思考ログ付き） =====
         signals = []
-        score = 0
+        cat_scores = {"割安": 0, "モメンタム": 0, "トレンド": 0, "逆風": 0}
+        CAT_CAPS = {"割安": 30, "モメンタム": 35, "トレンド": 25, "逆風": float('inf')}
         thinking = []  # 思考プロセス
 
         # RSI日足（リカバリーパターン対応）
@@ -344,141 +475,239 @@ def full_analyze(ticker, info, market):
         if cur_rsi < 25:
             signals.append(f"RSI極端売られすぎ({cur_rsi:.0f})")
             if rsi_rising:
-                score += 25
-                thinking.append(f"RSI{cur_rsi:.0f}は極端に低いが回復中(2日連続上昇)。底打ち反発の可能性が高い(+25)")
+                cat_scores["割安"] += 25
+                thinking.append(f"RSI{cur_rsi:.0f}は極端に低いが回復中(2日連続上昇)。底打ち反発の可能性が高い(割安+25)")
             else:
-                score += 5
-                thinking.append(f"RSI{cur_rsi:.0f}は極端に低いがまだ下落中。落ちるナイフを掴むリスクあり(+5)")
+                cat_scores["割安"] += 5
+                thinking.append(f"RSI{cur_rsi:.0f}は極端に低いがまだ下落中。落ちるナイフを掴むリスクあり(割安+5)")
         elif cur_rsi < 30:
             signals.append(f"RSI売られすぎ({cur_rsi:.0f})")
             if rsi_rising:
-                score += 15
-                thinking.append(f"RSI{cur_rsi:.0f}で売られすぎゾーン+回復中。反発を狙える水準(+15)")
+                cat_scores["割安"] += 15
+                thinking.append(f"RSI{cur_rsi:.0f}で売られすぎゾーン+回復中。反発を狙える水準(割安+15)")
             else:
-                score += 8
-                thinking.append(f"RSI{cur_rsi:.0f}で売られすぎだがまだ下落中。回復を待ってからエントリー(+8)")
+                cat_scores["割安"] += 8
+                thinking.append(f"RSI{cur_rsi:.0f}で売られすぎだがまだ下落中。回復を待ってからエントリー(割安+8)")
         elif cur_rsi > 75:
             signals.append(f"RSI買われすぎ({cur_rsi:.0f})")
-            score -= 25
-            thinking.append(f"RSI{cur_rsi:.0f}で過熱感あり。利確売りに押される可能性(-25)")
+            cat_scores["逆風"] -= 25
+            thinking.append(f"RSI{cur_rsi:.0f}で過熱感あり。利確売りに押される可能性(逆風-25)")
         elif cur_rsi > 70:
-            score -= 10
-            thinking.append(f"RSI{cur_rsi:.0f}でやや過熱。新規買いは慎重に(-10)")
+            cat_scores["逆風"] -= 10
+            thinking.append(f"RSI{cur_rsi:.0f}でやや過熱。新規買いは慎重に(逆風-10)")
         else:
             thinking.append(f"RSI{cur_rsi:.0f}で中立圏。特に偏りなし")
 
         # MACD日足
         if cur_mh > 0 and prev_mh <= 0:
             signals.append("日足GC!")
-            score += 25
-            thinking.append("日足MACDがマイナス→プラスに転換(GC)。下落トレンドが終わり上昇に転じるサイン(+25)")
+            cat_scores["モメンタム"] += 25
+            thinking.append("日足MACDがマイナス→プラスに転換(GC)。下落トレンドが終わり上昇に転じるサイン(モメンタム+25)")
         elif cur_mh < 0 and prev_mh >= 0:
             signals.append("日足DC")
-            score -= 25
-            thinking.append("日足MACDがプラス→マイナスに転換(DC)。上昇の勢いが失われ下落転換(-25)")
+            cat_scores["逆風"] -= 25
+            thinking.append("日足MACDがプラス→マイナスに転換(DC)。上昇の勢いが失われ下落転換(逆風-25)")
         elif cur_mh > 0:
-            score += 5
-            thinking.append("日足MACD正圏で上昇の勢い継続中(+5)")
+            cat_scores["モメンタム"] += 5
+            thinking.append("日足MACD正圏で上昇の勢い継続中(モメンタム+5)")
         else:
-            score -= 5
-            thinking.append("日足MACD負圏で下落の勢い継続中(-5)")
+            cat_scores["逆風"] -= 5
+            thinking.append("日足MACD負圏で下落の勢い継続中(逆風-5)")
 
         # MACD時間足
         if mh_h > 0 and prev_mh_h <= 0:
             signals.append("1h足GC!")
-            score += 20
-            thinking.append("1時間足でもGC発生。短期的にも上昇転換を確認、エントリータイミングとして最適(+20)")
+            cat_scores["モメンタム"] += 20
+            thinking.append("1時間足でもGC発生。短期的にも上昇転換を確認、エントリータイミングとして最適(モメンタム+20)")
         elif mh_h < 0 and prev_mh_h >= 0:
             signals.append("1h足DC")
-            score -= 20
-            thinking.append("1時間足でDC発生。短期的に売り圧力が強まっている(-20)")
+            cat_scores["逆風"] -= 20
+            thinking.append("1時間足でDC発生。短期的に売り圧力が強まっている(逆風-20)")
 
         # ダブルGC
         if (cur_mh > 0 and prev_mh <= 0) and (mh_h > 0 and prev_mh_h <= 0):
             signals.append("★★ダブルGC(日+1h)")
-            score += 15
-            thinking.append("日足と1時間足の両方でGC同時発生！非常に強いトレンド転換シグナル(+15)")
+            cat_scores["モメンタム"] += 15
+            thinking.append("日足と1時間足の両方でGC同時発生！非常に強いトレンド転換シグナル(モメンタム+15)")
 
-        # BB
+        # シグナル鮮度（改善4）
+        fresh, expanding, decaying = macd_freshness(macd_h)
+        if fresh:
+            cat_scores["モメンタム"] += 5
+            signals.append("🔥 GC鮮度◎(3日以内)")
+            thinking.append("MACDが3日以内にGC。シグナルが新鮮でタイミング良好(モメンタム+5)")
+        if expanding:
+            cat_scores["モメンタム"] += 5
+            thinking.append("MACDヒストグラム拡大中。モメンタム加速を確認(モメンタム+5)")
+        if decaying:
+            cat_scores["モメンタム"] -= 5
+            thinking.append("MACDヒストグラム2日連続縮小。上昇の勢いが衰え始めている(モメンタム-5)")
+
+        # BB（下落トレンド中は半減: 改善3）
+        is_downtrend = sma20_v < sma60_v
         if cur <= cur_bbl:
+            bb_score = 10 if is_downtrend else 20
             signals.append("BB下限突破")
-            score += 20
-            thinking.append(f"株価¥{cur:,.0f}がボリンジャーバンド下限¥{cur_bbl:,.0f}を割り込んだ。統計的に95%の確率で戻るゾーン(+20)")
+            cat_scores["割安"] += bb_score
+            if is_downtrend:
+                thinking.append(f"株価¥{cur:,.0f}がBB下限¥{cur_bbl:,.0f}を割り込んだが下降トレンド中のため半減(割安+{bb_score})")
+            else:
+                thinking.append(f"株価¥{cur:,.0f}がボリンジャーバンド下限¥{cur_bbl:,.0f}を割り込んだ。統計的に95%の確率で戻るゾーン(割安+{bb_score})")
         elif cur >= cur_bbu:
             signals.append("BB上限")
-            score -= 15
-            thinking.append(f"BB上限に到達。短期的な反落リスクあり(-15)")
+            cat_scores["逆風"] -= 15
+            thinking.append(f"BB上限に到達。短期的な反落リスクあり(逆風-15)")
 
-        # BB + RSI ダブル
+        # BB + RSI ダブル（下落トレンド中は半減: 改善3）
         if cur <= cur_bbl and cur_rsi < 35:
+            bbrsi_score = 8 if is_downtrend else 15
             signals.append("★ダブル底(BB+RSI)")
-            score += 15
-            thinking.append("BB下限+RSI低水準のダブル底。複数指標が同時に割安を示しており信頼度が高い(+15)")
+            cat_scores["割安"] += bbrsi_score
+            if is_downtrend:
+                thinking.append(f"BB下限+RSI低水準のダブル底だが下降トレンド中のため半減(割安+{bbrsi_score})")
+            else:
+                thinking.append(f"BB下限+RSI低水準のダブル底。複数指標が同時に割安を示しており信頼度が高い(割安+{bbrsi_score})")
 
         # トレンド
         if sma5_v > sma20_v and cur > sma5_v:
-            score += 10
-            thinking.append(f"SMA5({sma5_v:,.0f})>SMA20({sma20_v:,.0f})で短期上昇トレンド。株価もSMA5の上にあり順張り有利(+10)")
+            cat_scores["トレンド"] += 10
+            thinking.append(f"SMA5({sma5_v:,.0f})>SMA20({sma20_v:,.0f})で短期上昇トレンド。株価もSMA5の上にあり順張り有利(トレンド+10)")
         elif sma5_v < sma20_v and cur < sma5_v:
-            score -= 10
-            thinking.append(f"SMA5<SMA20で短期下降トレンド。逆張りはリスク高(-10)")
+            cat_scores["逆風"] -= 10
+            thinking.append(f"SMA5<SMA20で短期下降トレンド。逆張りはリスク高(逆風-10)")
 
         if sma20_v > sma60_v:
-            score += 5
-            thinking.append("中期トレンドも上向き。大きな流れに沿った買い(+5)")
+            cat_scores["トレンド"] += 5
+            thinking.append("中期トレンドも上向き。大きな流れに沿った買い(トレンド+5)")
         else:
-            score -= 5
-            thinking.append("中期トレンド下向き。大きな流れに逆らう買いは要注意(-5)")
+            cat_scores["逆風"] -= 5
+            thinking.append("中期トレンド下向き。大きな流れに逆らう買いは要注意(逆風-5)")
 
         # 出来高
         if vol_ratio > 3.0 and daily_chg > 0:
             signals.append(f"出来高爆増({vol_ratio:.1f}x)")
-            score += 25
-            thinking.append(f"出来高が通常の{vol_ratio:.1f}倍に爆増+株価上昇。機関投資家が大量に買っている可能性。本物の上昇(+25)")
+            cat_scores["モメンタム"] += 25
+            thinking.append(f"出来高が通常の{vol_ratio:.1f}倍に爆増+株価上昇。機関投資家が大量に買っている可能性。本物の上昇(モメンタム+25)")
         elif vol_ratio > 2.0 and daily_chg > 0:
             signals.append(f"出来高急増({vol_ratio:.1f}x)")
-            score += 15
-            thinking.append(f"出来高{vol_ratio:.1f}倍+上昇。通常より多くの買い手が参入(+15)")
+            cat_scores["モメンタム"] += 15
+            thinking.append(f"出来高{vol_ratio:.1f}倍+上昇。通常より多くの買い手が参入(モメンタム+15)")
         elif vol_ratio > 2.0 and daily_chg < 0:
-            score -= 10
-            thinking.append(f"出来高{vol_ratio:.1f}倍だが株価下落。大口の売りが入っている可能性(-10)")
+            cat_scores["逆風"] -= 10
+            thinking.append(f"出来高{vol_ratio:.1f}倍だが株価下落。大口の売りが入っている可能性(逆風-10)")
 
         # パターン
         for p in patterns:
             signals.append(p)
             if "ブレイクアウト" in p:
-                score += 20
-                thinking.append("直近20日の高値を突破！新たな上昇局面入りの可能性(+20)")
+                cat_scores["トレンド"] += 20
+                thinking.append("直近20日の高値を突破！新たな上昇局面入りの可能性(トレンド+20)")
             elif "ダブルボトム完成" in p:
-                score += 20
-                thinking.append("ダブルボトム完成。2回同じ安値で跳ね返された=強い支持線が存在。上昇転換の典型パターン(+20)")
+                cat_scores["トレンド"] += 20
+                thinking.append("ダブルボトム完成。2回同じ安値で跳ね返された=強い支持線が存在。上昇転換の典型パターン(トレンド+20)")
             elif "ダブルボトム形成" in p:
-                score += 10
-                thinking.append("ダブルボトム形成中。ネックライン突破を待つ段階(+10)")
+                cat_scores["トレンド"] += 10
+                thinking.append("ダブルボトム形成中。ネックライン突破を待つ段階(トレンド+10)")
             elif "三角持ち合い" in p:
-                score += 5
-                thinking.append("値動きが収縮中。エネルギーが溜まっておりブレイク間近(+5)")
+                cat_scores["トレンド"] += 5
+                thinking.append("値動きが収縮中。エネルギーが溜まっておりブレイク間近(トレンド+5)")
             elif "ブレイクダウン" in p:
-                score -= 15
-                thinking.append("安値割れ。下落加速の危険(-15)")
+                cat_scores["逆風"] -= 15
+                thinking.append("安値割れ。下落加速の危険(逆風-15)")
 
         # ダイバージェンス
         for d in divergences:
             signals.append(d)
             if "強気" in d:
-                score += 15
-                thinking.append("株価は下がっているがRSIは上がっている。売りの勢いが弱まっており底打ち間近(+15)")
+                cat_scores["トレンド"] += 15
+                thinking.append("株価は下がっているがRSIは上がっている。売りの勢いが弱まっており底打ち間近(トレンド+15)")
             elif "弱気" in d:
-                score -= 15
-                thinking.append("株価は上がっているがRSIは下がっている。買いの勢いが弱まっており天井間近(-15)")
+                cat_scores["逆風"] -= 15
+                thinking.append("株価は上がっているがRSIは下がっている。買いの勢いが弱まっており天井間近(逆風-15)")
 
-        # 急騰急落
-        if daily_chg > 5:
-            signals.append(f"急騰{daily_chg:+.1f}%")
-            thinking.append(f"本日{daily_chg:+.1f}%の急騰。何らかの材料あり。飛び乗りは高値掴みリスクあるが勢いは本物")
-        elif daily_chg < -5:
-            signals.append(f"急落{daily_chg:+.1f}%")
-            thinking.append(f"本日{daily_chg:+.1f}%の急落。パニック売りなら逆張りチャンスだが、悪材料なら追撃下落の可能性も")
+        # 急騰急落（ボラティリティ正規化: 改善2）
+        sigma = daily_chg / atr_pct if atr_pct > 0 else 0
+        if sigma > 2.0:
+            signals.append(f"急騰{daily_chg:+.1f}% ({sigma:.1f}σ)")
+            thinking.append(f"本日{daily_chg:+.1f}%({sigma:.1f}σ)の急騰。ATR比で異常な上昇。材料あり。飛び乗りは高値掴みリスクあるが勢いは本物")
+        elif sigma < -2.0:
+            signals.append(f"急落{daily_chg:+.1f}% ({sigma:.1f}σ)")
+            thinking.append(f"本日{daily_chg:+.1f}%({sigma:.1f}σ)の急落。ATR比で異常な下落。パニック売りなら逆張りチャンスだが、悪材料なら追撃下落の可能性も")
+
+        # 支持線コンフルエンス（改善6）
+        if sr.get("confluence_support") and cur_atr > 0:
+            dist_to_support = cur - sr["S1"]
+            if dist_to_support <= cur_atr:
+                cat_scores["割安"] += 10
+                signals.append("🛡️ 支持線コンフルエンス")
+                thinking.append(f"複数の支持線が集中するゾーンから1ATR以内。反発の確率が高い(割安+10)")
+
+        # 勝率フィードバック適用（改善8）
+        if signal_weights:
+            for sig in signals:
+                sig_key = sig
+                for prefix in ["📈", "🚀", "💡", "★★", "★", "🔥", "🛡️", "📅"]:
+                    sig_key = sig_key.replace(prefix, "").strip()
+                if sig_key in signal_weights:
+                    w = signal_weights[sig_key]
+                    # 正のカテゴリスコアのみ減衰（逆風はそのまま）
+                    for cat in ("割安", "モメンタム", "トレンド"):
+                        if cat_scores[cat] > 0:
+                            old = cat_scores[cat]
+                            cat_scores[cat] = int(cat_scores[cat] * w)
+                            if old != cat_scores[cat]:
+                                thinking.append(f"📉 フィードバック: シグナル'{sig_key}'の勝率が低いため{cat}スコア減衰({old:+d}→{cat_scores[cat]:+d})")
+                    break  # 1つのweightで全体を減衰させたので重複適用しない
+
+        # カテゴリキャップ適用（改善1）
+        for cat, cap in CAT_CAPS.items():
+            raw = cat_scores[cat]
+            if raw > cap:
+                cat_scores[cat] = cap
+                thinking.append(f"📊 カテゴリキャップ: {cat}カテゴリ {raw:+d}→{cap:+d}に制限(二重計上防止)")
+        score = sum(cat_scores.values())
+        thinking.append(f"📊 カテゴリ別スコア: 割安{cat_scores['割安']:+d} モメンタム{cat_scores['モメンタム']:+d} トレンド{cat_scores['トレンド']:+d} 逆風{cat_scores['逆風']:+d} = 合計{score:+d}")
+
+        # 決算カレンダー調整（改善7）
+        earnings_near = False
+        earnings_recent = False
+        try:
+            cal = t.calendar
+            if cal is not None:
+                # DataFrameまたはdictの場合に対応
+                next_earnings = None
+                if isinstance(cal, pd.DataFrame) and 'Earnings Date' in cal.columns:
+                    next_earnings = pd.Timestamp(cal['Earnings Date'].iloc[0])
+                elif isinstance(cal, dict) and 'Earnings Date' in cal:
+                    dates = cal['Earnings Date']
+                    if dates:
+                        next_earnings = pd.Timestamp(dates[0]) if isinstance(dates, list) else pd.Timestamp(dates)
+                if next_earnings:
+                    days_to_earnings = (next_earnings - pd.Timestamp.now()).days
+                    if 0 <= days_to_earnings <= 5:
+                        earnings_near = True
+                        pre_score = score
+                        score = int(score * 0.5)
+                        thinking.append(f"📅 決算カレンダー: 決算まで{days_to_earnings}日。不確実性が高いためスコア半減({pre_score:+d}→{score:+d})")
+        except:
+            pass
+
+        try:
+            ed = t.earnings_dates
+            if ed is not None and len(ed) > 0:
+                last_earnings = ed.index[0]
+                days_since = (pd.Timestamp.now() - last_earnings).days
+                if 0 <= days_since <= 3:
+                    earnings_recent = True
+                    has_gc = any("GC" in s for s in signals)
+                    has_breakout = any("ブレイクアウト" in s for s in signals)
+                    if has_gc or has_breakout:
+                        cat_scores["モメンタム"] += 10
+                        score += 10
+                        signals.append("📅 決算後モメンタム")
+                        thinking.append(f"📅 決算後{days_since}日+GC/ブレイクアウト。決算を好感した上昇モメンタム(モメンタム+10)")
+        except:
+            pass
 
         # 判定
         if score >= 60:
@@ -509,14 +738,17 @@ def full_analyze(ticker, info, market):
         if score >= 40:
             trend_ok = check_trend_alignment(sma5_v, sma20_v, sma60_v, cur)
             if not trend_ok:
+                cat_scores["逆風"] -= 20
                 score -= 20
-                thinking.append("⛩️ トリニティゲート: トレンドが下向き。買いスコアが高くても逆張りはリスク大(-20)")
+                thinking.append("⛩️ トリニティゲート: トレンドが下向き。買いスコアが高くても逆張りはリスク大(逆風-20)")
             if vol_ratio < 1.0:
+                cat_scores["逆風"] -= 10
                 score -= 10
-                thinking.append("⛩️ トリニティゲート: 出来高が平均以下。上昇の裏付けが弱い(-10)")
+                thinking.append("⛩️ トリニティゲート: 出来高が平均以下。上昇の裏付けが弱い(逆風-10)")
             if rr_ratio > 0 and rr_ratio < 2.0:
+                cat_scores["逆風"] -= 10
                 score -= 10
-                thinking.append(f"⛩️ トリニティゲート: R:R比{rr_ratio:.1f}:1は2.0未満。リスクに見合わない(-10)")
+                thinking.append(f"⛩️ トリニティゲート: R:R比{rr_ratio:.1f}:1は2.0未満。リスクに見合わない(逆風-10)")
 
         # 最終思考まとめ
         if score >= 40:
@@ -541,14 +773,16 @@ def full_analyze(ticker, info, market):
             "pivot": sr["pivot"], "rr_ratio": rr_ratio,
             "signals": signals, "score": score,
             "verdict": verdict, "urgency": urgency,
-            "thinking": thinking,
+            "thinking": thinking, "category_scores": dict(cat_scores),
         }
     except:
         return None
 
 
 def analyze_worker(args):
-    return full_analyze(*args)
+    if len(args) == 4:
+        return full_analyze(args[0], args[1], args[2], args[3])
+    return full_analyze(args[0], args[1], args[2])
 
 
 # ===== 市場レジーム =====
@@ -712,6 +946,93 @@ def mark_notified(state, ticker, score):
     state["notified"] = {k: v for k, v in state["notified"].items() if v > cutoff}
 
 
+def update_signal_feedback(state, results, th_hot):
+    """勝率フィードバックループ（改善8）
+    1. スコア≧th_hotの銘柄をsignal_historyに記録
+    2. 5日以上経過した記録の現在価格を取得（1回のrunで最大10件チェック）
+    3. +3%以上なら勝ち → signal_stats更新
+    4. 10サンプル以上 & 勝率<40% → signal_weights=0.7
+    """
+    state.setdefault("signal_history", [])
+    state.setdefault("signal_stats", {})
+    state.setdefault("signal_weights", {})
+
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # 1. 新しいシグナルを記録
+    for r in results:
+        if r["score"] >= th_hot and r["signals"]:
+            # 同じ日・同じ銘柄は重複記録しない
+            already = any(
+                h["date"] == today and h["ticker"] == r["ticker"]
+                for h in state["signal_history"]
+            )
+            if not already:
+                state["signal_history"].append({
+                    "date": today,
+                    "ticker": r["ticker"],
+                    "price": r["price"],
+                    "signals": r["signals"][:5],
+                    "checked": False,
+                })
+
+    # 2. 5日以上経過した未チェック記録を評価（最大10件）
+    checked_count = 0
+    for record in state["signal_history"]:
+        if checked_count >= 10:
+            break
+        if record.get("checked"):
+            continue
+        rec_date = datetime.strptime(record["date"], "%Y-%m-%d")
+        if (datetime.now() - rec_date).days < 5:
+            continue
+
+        try:
+            t = yf.Ticker(record["ticker"])
+            data = t.history(period="5d")
+            if data.empty:
+                continue
+            cur_price = float(data['Close'].iloc[-1])
+            ret = (cur_price - record["price"]) / record["price"] * 100
+            is_win = ret >= 3.0
+
+            # 3. signal_stats更新
+            for sig in record["signals"]:
+                # シグナル名を正規化（数値部分を除去）
+                sig_key = sig
+                for prefix in ["📈", "🚀", "💡", "★★", "★", "🔥", "🛡️", "📅"]:
+                    sig_key = sig_key.replace(prefix, "").strip()
+
+                state["signal_stats"].setdefault(sig_key, {"total": 0, "wins": 0, "total_return": 0})
+                state["signal_stats"][sig_key]["total"] += 1
+                if is_win:
+                    state["signal_stats"][sig_key]["wins"] += 1
+                state["signal_stats"][sig_key]["total_return"] += ret
+
+            record["checked"] = True
+            record["result_return"] = ret
+            checked_count += 1
+        except:
+            continue
+
+    # 4. signal_weights更新: 10サンプル以上 & 勝率<40% → 0.7
+    for sig_key, stats in state["signal_stats"].items():
+        if stats["total"] >= 10:
+            win_rate = stats["wins"] / stats["total"]
+            if win_rate < 0.4:
+                state["signal_weights"][sig_key] = 0.7
+            elif sig_key in state["signal_weights"]:
+                del state["signal_weights"][sig_key]
+        stats["avg_return"] = stats["total_return"] / stats["total"] if stats["total"] > 0 else 0
+
+    # 古い履歴を削除（90日以上前）
+    cutoff_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+    state["signal_history"] = [
+        h for h in state["signal_history"]
+        if h["date"] >= cutoff_date
+    ]
+
+
 # ===== ポジション損益チェック =====
 def check_positions_for_brain():
     """保有ポジションの売りシグナルチェック"""
@@ -757,13 +1078,16 @@ def run_brain(markets="all", mode="scan"):
     state["cycle"] = state.get("cycle", 0) + 1
     now = datetime.now()
 
+    # 勝率フィードバックのweights取得（改善8）
+    sig_weights = state.get("signal_weights", {}) or None
+
     targets = []
     if markets in ("all", "jp"):
         for ticker, info in JP_STOCKS.items():
-            targets.append((ticker, info, "JP"))
+            targets.append((ticker, info, "JP", sig_weights))
     if markets in ("all", "us"):
         for ticker, info in US_STOCKS.items():
-            targets.append((ticker, info, "US"))
+            targets.append((ticker, info, "US", sig_weights))
 
     print(f"\n{'='*60}")
     print(f"  🧠 Trading Brain サイクル#{state['cycle']} ({now.strftime('%H:%M:%S')})")
@@ -805,6 +1129,21 @@ def run_brain(markets="all", mode="scan"):
 
     # セクター分析
     sectors = analyze_sectors(results)
+
+    # 相対強度（改善5）: セクター内の超過リターンで調整
+    sector_daily_chgs = defaultdict(list)
+    for r in results:
+        sector_daily_chgs[r["sector"]].append(r["daily_chg"])
+    sector_avg_chg = {s: sum(v) / len(v) for s, v in sector_daily_chgs.items() if v}
+    for r in results:
+        avg_chg = sector_avg_chg.get(r["sector"], 0)
+        excess_return = r["daily_chg"] - avg_chg
+        if excess_return > 2.0:
+            r["score"] += 10
+            r["thinking"].append(f"📈 相対強度: {r['sector']}セクター平均{avg_chg:+.1f}%に対し{r['daily_chg']:+.1f}%(超過{excess_return:+.1f}%)。セクター内で突出(+10)")
+        elif excess_return < -2.0:
+            r["score"] -= 10
+            r["thinking"].append(f"📉 相対強度: {r['sector']}セクター平均{avg_chg:+.1f}%に対し{r['daily_chg']:+.1f}%(超過{excess_return:+.1f}%)。セクター内で弱い(-10)")
 
     # セクター集中ペナルティ
     pos_sectors = get_position_sectors()
@@ -997,6 +1336,9 @@ def run_brain(markets="all", mode="scan"):
 
     else:
         print(f"  📊 特に強いシグナルなし")
+
+    # 勝率フィードバック更新（改善8）
+    update_signal_feedback(state, results, th_hot)
 
     save_state(state)
     return results
