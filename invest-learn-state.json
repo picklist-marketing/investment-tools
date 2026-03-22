@@ -1,5 +1,5 @@
 {
-  "next_index": 10,
+  "next_index": 11,
   "sent_log": [
     {
       "index": 0,
@@ -50,6 +50,11 @@
       "index": 9,
       "title": "RSI（相対力指数）",
       "sent_at": "2026-03-19T23:33:34.737743"
+    },
+    {
+      "index": 10,
+      "title": "MACD完全ガイド",
+      "sent_at": "2026-03-22T23:32:32.292910"
     }
   ]
 }
